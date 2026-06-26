@@ -1,0 +1,54 @@
+name: Update Cask
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 毎日 JST 15:00 に実行
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest release
+        id: release
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/gitusp/azoo-key-skkserv/releases/latest)
+          VERSION=$(echo "$LATEST" | jq -r '.tag_name' | sed 's/^v//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          DMG_URL="https://github.com/gitusp/azoo-key-skkserv/releases/download/v${VERSION}/azoo-key-skkserv-${VERSION}.dmg"
+          echo "dmg_url=$DMG_URL" >> "$GITHUB_OUTPUT"
+
+          SHA=$(curl -sL "$DMG_URL" | sha256sum | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          CURRENT=$(grep 'version "' Casks/azoo-key-skkserv.rb | grep -o '"[^"]*"' | tr -d '"')
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" = "${{ steps.release.outputs.version }}" ]; then
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update cask
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          SHA="${{ steps.release.outputs.sha256 }}"
+
+          sed -i "s|version \".*\"|version \"$VERSION\"|" Casks/azoo-key-skkserv.rb
+          sed -i "s|sha256 \".*\"|sha256 \"$SHA\"|" Casks/azoo-key-skkserv.rb
+
+      - name: Commit and push
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/azoo-key-skkserv.rb
+          git commit -m "Update azoo-key-skkserv to ${{ steps.release.outputs.version }}"
+          git push
