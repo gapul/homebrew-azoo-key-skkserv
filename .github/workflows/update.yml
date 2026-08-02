@@ -2,8 +2,11 @@ name: Update Cask
 
 on:
   schedule:
-    - cron: "0 6 * * *"  # 毎日 JST 15:00 に実行
+    - cron: "0 6 * * *"  # Runs daily at 15:00 JST
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   update:
@@ -13,15 +16,33 @@ jobs:
 
       - name: Get latest release
         id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/gitusp/azoo-key-skkserv/releases/latest)
-          VERSION=$(echo "$LATEST" | jq -r '.tag_name' | sed 's/^v//')
+          set -euo pipefail
+
+          # Authenticated call so the shared runner IP isn't rate-limited (60 -> 5000 req/h)
+          LATEST=$(curl -sfL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/gitusp/azoo-key-skkserv/releases/latest)
+
+          VERSION=$(echo "$LATEST" | jq -r '.tag_name // empty' | sed 's/^v//')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not determine latest version. API response:"
+            echo "$LATEST"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           DMG_URL="https://github.com/gitusp/azoo-key-skkserv/releases/download/v${VERSION}/azoo-key-skkserv-${VERSION}.dmg"
           echo "dmg_url=$DMG_URL" >> "$GITHUB_OUTPUT"
 
-          SHA=$(curl -sL "$DMG_URL" | sha256sum | awk '{print $1}')
+          SHA=$(curl -sfL "$DMG_URL" | sha256sum | awk '{print $1}')
+          if [ -z "$SHA" ] || [ "$SHA" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+            echo "::error::Failed to download DMG or got an empty file: $DMG_URL"
+            exit 1
+          fi
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Check if update needed
